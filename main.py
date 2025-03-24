@@ -10,7 +10,7 @@ app = Flask(__name__)
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
-        # Odczytujemy wgrany plik HTML
+        # Odczyt pliku HTML przesłanego przez użytkownika
         if "file" not in request.files:
             return "Nie znaleziono pliku", 400
         file = request.files["file"]
@@ -34,7 +34,7 @@ def index():
         current_currency = None
         for tr in trades_table.find_all("tr"):
             cells = tr.find_all("td")
-            # Jeśli wiersz z jedną komórką – traktujemy go jako podnagłówek (waluta)
+            # Jeśli wiersz ma jedną komórkę – ustawiamy walutę (podnagłówek)
             if len(cells) == 1:
                 text = cells[0].get_text(strip=True)
                 if text in ["EUR", "GBP", "USD", "PLN"]:
@@ -57,7 +57,7 @@ def index():
                     "Basis": basis
                 })
         df_trades = pd.DataFrame(data)
-        # Filtrujemy wiersze: usuwamy te, gdzie Quantity jest puste, Stock zawiera "total", lub Basis jest puste
+        # Filtrowanie – usuwamy wiersze z pustym Quantity, te z "total" w Stock oraz te z pustym Basis
         df_trades = df_trades[~((df_trades["Quantity"].str.strip() == "") &
                                 (df_trades["Stock"].str.lower().str.contains("total")))]
         df_trades = df_trades[df_trades["Basis"].str.strip() != ""]
@@ -71,7 +71,7 @@ def index():
         df_kursy = pd.read_csv("kursy.csv", delimiter=",")
         df_kursy["data"] = pd.to_datetime(df_kursy["data"], format="%Y%m%d", errors="coerce")
         df_kursy = df_kursy.sort_values("data")
-        # Aby wybrać kurs z dnia wcześniejszego niż transakcja, odejmujemy 1 dobę
+        # Odejmujemy 1 dobę od daty transakcji, aby wybrać kurs z dnia wcześniejszego
         df_trades["match_date"] = df_trades["Date/Time"] - timedelta(days=1)
         df_trades = df_trades.sort_values("match_date")
         df_trades = pd.merge_asof(df_trades, df_kursy, left_on="match_date", right_on="data", direction="backward")
@@ -100,29 +100,26 @@ def index():
         desired_order = ["waluty", "Stock", "Date/Time", "Quantity", "Proceeds", "Proceeds_converted",
                          "Comm/Fee", "Basis", "Kurs_Date", "rate", "Basis_converted", "Comm/Fee_converted"]
         df_trades = df_trades[desired_order]
-        # Zapisujemy trades.csv (opcjonalnie)
-        df_trades.to_csv("trades.csv", index=False)
+        df_trades.to_csv("trades.csv", index=False)  # opcjonalne zapisanie
 
         # -----------------------------
         # Część 3: Grupowanie po Stock, alokacja FIFO oraz podsumowanie
         # -----------------------------
-        # Dodajemy kolumny pomocnicze do alokacji FIFO:
-        # - fifo_allocated: dla transakcji kupna, ile zostało wykorzystane (może być ułamkowe)
-        # - fifo_used: True, jeśli transakcja (kupna lub sprzedaży) została wykorzystana
-        df_trades["fifo_allocated"] = 0.0
-        df_trades["fifo_used"] = False
-        # Sprzedaże (Quantity < 0) traktujemy jako całkowicie użyte
+        # Dodajemy kolumny pomocnicze do alokacji FIFO
+        df_trades["fifo_allocated"] = 0.0  # dla kupna: ilość wykorzystana
+        df_trades["fifo_used"] = False  # True, gdy transakcja (buy lub sell) została użyta
+
+        # Sprzedaże (Quantity < 0) uznajemy za całkowicie użyte
         df_trades.loc[df_trades["Quantity"] < 0, "fifo_used"] = True
 
         stock_results = {}
         for stock, group in df_trades.groupby("Stock"):
             group = group.sort_values("Date/Time").copy()
-            # Sprzedaże
+            # Obliczamy całkowitą ilość sprzedaną (tylko sprzedaże, Quantity < 0)
             sells = group[group["Quantity"] < 0]
-            # Całkowita ilość sprzedana (jako wartość dodatnia) – tylko z transakcji sprzedaży
             total_sold = -sells["Quantity"].sum() if not sells.empty else 0.0
 
-            # Alokacja kupna (FIFO): przechodzimy przez transakcje kupna i przypisujemy fifo_allocated
+            # Alokacja kupna – FIFO: dla transakcji kupna, które nie są jeszcze wykorzystane
             buys = group[(group["Quantity"] > 0) & (group["fifo_used"] == False)].sort_values("Date/Time").copy()
             remaining = total_sold
             for idx, buy in buys.iterrows():
@@ -138,9 +135,8 @@ def index():
                     group.at[idx, "fifo_used"] = True
                     remaining = 0
 
-            # Podsumowanie – sumujemy dla wszystkich wierszy, które mają fifo_used == True,
-            # zarówno sprzedaże (Quantity < 0) jak i kupna (Quantity > 0) – przy kupnach skalujemy wartości proporcjonalnie
-            total_sold_sum = 0.0
+            # Podsumowanie FIFO – sumujemy dla wszystkich transakcji, które zostały użyte (fifo_used == True)
+            total_sold_sum = 0.0  # suma sprzedanych (tylko ze sprzedaży)
             proceeds_sum = 0.0
             proceeds_conv_sum = 0.0
             comm_fee_sum = 0.0
@@ -151,14 +147,22 @@ def index():
             for idx, row in group.iterrows():
                 if row["fifo_used"]:
                     if row["Quantity"] < 0:
-                        # Sprzedaż: używamy pełnych wartości
+                        # Sprzedaż – używamy pełnych wartości
                         total_sold_sum += -row["Quantity"]
                         proceeds_sum += row["Proceeds"]
                         proceeds_conv_sum += row["Proceeds_converted"]
                         comm_fee_sum += row["Comm/Fee"]
+                        # Dla sprzedaży dodajemy Basis, Basis_converted oraz Comm/Fee_converted (jeśli występują)
+                        basis_sum += row["Basis"]
+                        basis_conv_sum += row["Basis_converted"]
+                        comm_fee_conv_sum += row["Comm/Fee_converted"]
                     elif row["Quantity"] > 0:
-                        # Kupno: skalujemy wartości wg. udziału wykorzystanego (fifo_allocated/Quantity)
+                        # Kupno – skalujemy wartości wg. udziału wykorzystanego (fifo_allocated / Quantity)
                         fraction = row["fifo_allocated"] / row["Quantity"] if row["Quantity"] != 0 else 0
+                        # Kupna nie dodajemy do Total_Sold
+                        proceeds_sum += row["Proceeds"] * fraction
+                        proceeds_conv_sum += row["Proceeds_converted"] * fraction
+                        comm_fee_sum += row["Comm/Fee"] * fraction
                         basis_sum += row["Basis"] * fraction
                         basis_conv_sum += row["Basis_converted"] * fraction
                         comm_fee_conv_sum += row["Comm/Fee_converted"] * fraction
@@ -174,7 +178,7 @@ def index():
                 "Comm/Fee_converted sum": [comm_fee_conv_sum]
             })
 
-            # Oznaczamy na żółto transakcje wykorzystane w FIFO
+            # Oznaczamy na żółto transakcje użyte w FIFO
             def highlight_fifo(row):
                 return ['background-color: yellow' if row["fifo_used"] else '' for _ in row.index]
 
