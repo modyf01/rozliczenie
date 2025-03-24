@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Dodaj transakcję</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  </head>
+  <body>
+    <div class="container mt-4">
+      <h1>Dodaj nową transakcję</h1>
+      <form method="post">
+        <div class="form-group">
+          <label>Waluta</label>
+          <select name="waluty" class="form-control">
+            <option value="EUR">EUR</option>
+            <option value="GBP">GBP</option>
+            <option value="USD">USD</option>
+            <option value="PLN">PLN</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Stock</label>
+          <input type="text" name="Stock" class="form-control" required>
+        </div>
+        <div class="form-group">
+          <label>Data i godzina (YYYY-MM-DD HH:MM:SS)</label>
+          <input type="text" name="DateTime" class="form-control" placeholder="2025-03-24 15:30:00" required>
+        </div>
+        <div class="form-group">
+          <label>Quantity</label>
+          <input type="text" name="Quantity" class="form-control" required>
+        </div>
+        <div class="form-group">
+          <label>Proceeds</label>
+          <input type="text" name="Proceeds" class="form-control" required>
+        </div>
+        <div class="form-group">
+          <label>Comm/Fee</label>
+          <input type="text" name="CommFee" class="form-control" required>
+        </div>
+        <div class="form-group">
+          <label>Basis</label>
+          <input type="text" name="Basis" class="form-control" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Dodaj transakcję</button>
+      </form>
+      <br>
+      <a href="{{ url_for('index') }}" class="btn btn-secondary">Powrót</a>
+    </div>
+  </body>
+</html>
