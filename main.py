@@ -62,7 +62,7 @@ def filter_and_convert_transactions(df_trades: pd.DataFrame) -> pd.DataFrame:
     Filtrowanie wierszy oraz konwersja kolumn liczbowych i dat.
     """
     df_trades = df_trades[~((df_trades["Quantity"].str.strip() == "") &
-                            (df_trades["Stock"].str.lower().str.contains("total")))]
+                             (df_trades["Stock"].str.lower().str.contains("total")))]
     df_trades = df_trades[df_trades["Basis"].str.strip() != ""]
 
     for col in ["Quantity", "Proceeds", "Comm/Fee", "Basis"]:
@@ -204,6 +204,20 @@ def highlight_fifo(row):
     return ['background-color: yellow' if row["fifo_used"] else '' for _ in row.index]
 
 
+def check_negative_fifo(df_stock: pd.DataFrame) -> bool:
+    """
+    Sprawdza, czy dla danego stocku, idąc chronologicznie, bieżąca suma Quantity spada poniżej zera.
+    Jeśli tak – zwraca True, co oznacza, że brakuje transakcji.
+    """
+    df_stock = df_stock.sort_values("Date/Time")
+    running_total = 0.0
+    for qty in df_stock["Quantity"]:
+        running_total += qty
+        if running_total < 0:
+            return True
+    return False
+
+
 def process_all_trades() -> pd.DataFrame:
     """
     Przetwarza globalny DataFrame transakcji pełnym potokiem: filtrowanie, łączenie z kursami,
@@ -292,6 +306,9 @@ def index():
     if not processed_df.empty:
         for stock, group in processed_df.groupby("Stock"):
             group_sorted = group.sort_values("Date/Time").copy()
+            # Sprawdź, czy występuje ujemna suma transakcji dla danego stocku
+            has_issue = check_negative_fifo(group_sorted)
+            display_name = stock + (" !" if has_issue else "")
             group_sorted["Action"] = group_sorted["id"].apply(
                 lambda x: f'<a href="{url_for("remove_transaction", transaction_id=x)}">Usuń</a>'
             )
@@ -300,6 +317,7 @@ def index():
             summary = summarize_transactions(group_sorted)
             summary_html = summary.to_html(classes="table table-bordered", index=False, border=0)
             stock_results[stock] = {
+                "display_name": display_name,
                 "transactions": transactions_html,
                 "summary": summary_html
             }
