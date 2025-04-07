@@ -12,6 +12,28 @@
       <div class="refresh-container" style="margin-bottom: 20px;">
         <a href="{{ url_for('refresh') }}" class="btn btn-warning">Odśwież (wyczyść wszystkie transakcje)</a>
       </div>
+      
+      <!-- Dodajemy informację o obecnym pliku z kursami -->
+      <div class="alert alert-info">
+        Używany plik kursów walut: <strong>{{ current_rates_file }}</strong>
+      </div>
+      
+      <!-- Formularz do wgrywania pliku z kursami walut -->
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5>Wgraj własny plik CSV z kursami walut</h5>
+        </div>
+        <div class="card-body">
+          <form method="post" enctype="multipart/form-data" action="{{ url_for('index') }}" class="mb-0">
+            <div class="form-group">
+              <label>Plik musi zawierać kolumny: data, 1 USD, 1 EUR, 1 GBP</label>
+              <input type="file" name="exchange_rates_file" class="form-control-file" accept=".csv">
+            </div>
+            <button type="submit" class="btn btn-info">Wgraj plik kursów</button>
+          </form>
+        </div>
+      </div>
+      
       <ul class="nav nav-tabs" id="stockTab" role="tablist">
         <!-- Zakładka ALL zawsze jako pierwsza -->
         {% if "all" in stock_results %}

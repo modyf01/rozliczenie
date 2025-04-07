@@ -3,6 +3,7 @@ import pandas as pd
 import re
 from bs4 import BeautifulSoup
 from datetime import timedelta, datetime
+import os
 
 app = Flask(__name__)
 
@@ -11,6 +12,7 @@ all_trades_df = pd.DataFrame(
     columns=["id", "waluty", "Stock", "Date/Time", "Quantity", "Proceeds", "Comm/Fee", "Basis"]
 )
 next_transaction_id = 1
+exchange_rates_file = "kursy.csv"  # Domyślna ścieżka do pliku z kursami
 
 
 # ----------------- Funkcje pomocnicze -----------------
@@ -223,12 +225,12 @@ def process_all_trades() -> pd.DataFrame:
     Przetwarza globalny DataFrame transakcji pełnym potokiem: filtrowanie, łączenie z kursami,
     konwersja walut oraz alokacja FIFO.
     """
-    global all_trades_df
+    global all_trades_df, exchange_rates_file
     if all_trades_df.empty:
         return pd.DataFrame()
     df = all_trades_df.copy()
     df = filter_and_convert_transactions(df)
-    df_kursy = load_exchange_rates("kursy.csv")
+    df_kursy = load_exchange_rates(exchange_rates_file)
     df = merge_exchange_rates(df, df_kursy)
     df = apply_currency_conversion(df)
     df = allocate_fifo(df)
@@ -238,11 +240,37 @@ def process_all_trades() -> pd.DataFrame:
 # ----------------- Trasy Flask -----------------
 @app.route("/", methods=["GET", "POST"])
 def index():
-    global all_trades_df, next_transaction_id
+    global all_trades_df, next_transaction_id, exchange_rates_file
 
     if request.method == "POST":
+        # Obsługa wgrywania pliku CSV z kursami walut
+        if "exchange_rates_file" in request.files and request.files["exchange_rates_file"].filename:
+            file = request.files["exchange_rates_file"]
+            if file.filename.endswith('.csv'):
+                # Zapisz plik tymczasowo
+                temp_path = "uploaded_" + file.filename
+                file.save(temp_path)
+                
+                try:
+                    # Sprawdź czy plik ma prawidłowy format
+                    test_df = pd.read_csv(temp_path, delimiter=",")
+                    required_columns = ["data", "1 USD", "1 EUR", "1 GBP"]
+                    if all(col in test_df.columns for col in required_columns):
+                        exchange_rates_file = temp_path
+                    else:
+                        os.remove(temp_path)
+                        return "Plik CSV musi zawierać kolumny: data, 1 USD, 1 EUR, 1 GBP", 400
+                except Exception as e:
+                    os.remove(temp_path)
+                    return f"Błąd podczas przetwarzania pliku CSV: {str(e)}", 400
+                
+            else:
+                return "Plik musi mieć rozszerzenie .csv", 400
+            
+            return redirect(url_for("index"))
+        
         # Obsługa wgrywania plików HTML
-        if "files" in request.files and any(file.filename for file in request.files.getlist("files")):
+        elif "files" in request.files and any(file.filename for file in request.files.getlist("files")):
             files = request.files.getlist("files")
             df_list = []
             for file in files:
@@ -375,7 +403,11 @@ def index():
             "transactions": "",  # Puste, bo nie pokazujemy transakcji w tej zakładce
             "summary": all_summary_html
         }
-    return render_template("results.html", stock_results=stock_results)
+    
+    # Dodaj informację o obecnie używanym pliku z kursami
+    current_rates_file = os.path.basename(exchange_rates_file)
+    
+    return render_template("results.html", stock_results=stock_results, current_rates_file=current_rates_file)
 
 
 @app.route("/remove-transaction/<int:transaction_id>")
@@ -391,11 +423,16 @@ def refresh():
     """
     Odświeża aplikację - czyści wszystkie załadowane transakcje.
     """
-    global all_trades_df, next_transaction_id
+    global all_trades_df, next_transaction_id, exchange_rates_file
     all_trades_df = pd.DataFrame(
         columns=["id", "waluty", "Stock", "Date/Time", "Quantity", "Proceeds", "Comm/Fee", "Basis"]
     )
     next_transaction_id = 1
+    # Resetowanie do domyślnego pliku z kursami
+    if exchange_rates_file != "kursy.csv" and os.path.exists(exchange_rates_file):
+        if exchange_rates_file.startswith("uploaded_"):
+            os.remove(exchange_rates_file)
+    exchange_rates_file = "kursy.csv"
     return redirect(url_for("index"))
 
 
