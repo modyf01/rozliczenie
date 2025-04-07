@@ -386,5 +386,18 @@ def remove_transaction(transaction_id):
     return redirect(url_for("index"))
 
 
+@app.route("/refresh")
+def refresh():
+    """
+    Odświeża aplikację - czyści wszystkie załadowane transakcje.
+    """
+    global all_trades_df, next_transaction_id
+    all_trades_df = pd.DataFrame(
+        columns=["id", "waluty", "Stock", "Date/Time", "Quantity", "Proceeds", "Comm/Fee", "Basis"]
+    )
+    next_transaction_id = 1
+    return redirect(url_for("index"))
+
+
 if __name__ == "__main__":
     app.run(debug=True)

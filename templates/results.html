@@ -9,6 +9,9 @@
   <body>
     <div class="container mt-4">
       <h1>Wyniki transakcji - Zakładki dla każdego Stock</h1>
+      <div class="refresh-container" style="margin-bottom: 20px;">
+        <a href="{{ url_for('refresh') }}" class="btn btn-warning">Odśwież (wyczyść wszystkie transakcje)</a>
+      </div>
       <ul class="nav nav-tabs" id="stockTab" role="tablist">
         <!-- Zakładka ALL zawsze jako pierwsza -->
         {% if "all" in stock_results %}
