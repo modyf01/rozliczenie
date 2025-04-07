@@ -304,6 +304,18 @@ def index():
     processed_df = process_all_trades()
     stock_results = {}
     if not processed_df.empty:
+        # Dodajemy obliczenie sum dla wszystkich akcji
+        all_summary = pd.DataFrame({
+            "Stock": ["All"],
+            "Total_Sold": [0.0],
+            "Proceeds sum": [0.0],
+            "Proceeds_converted sum": [0.0],
+            "Comm/Fee sum": [0.0],
+            "Basis sum": [0.0],
+            "Basis_converted sum": [0.0],
+            "Comm/Fee_converted sum": [0.0]
+        })
+        
         for stock, group in processed_df.groupby("Stock"):
             group_sorted = group.sort_values("Date/Time").copy()
             # Sprawdź, czy występuje ujemna suma transakcji dla danego stocku
@@ -321,6 +333,26 @@ def index():
                 "transactions": transactions_html,
                 "summary": summary_html
             }
+            
+            # Aktualizujemy sumy dla zakładki "All"
+            if not summary.empty:
+                all_summary["Proceeds_converted sum"] += summary["Proceeds_converted sum"].values[0]
+                all_summary["Basis_converted sum"] += summary["Basis_converted sum"].values[0]
+                all_summary["Comm/Fee_converted sum"] += summary["Comm/Fee_converted sum"].values[0]
+        
+        # Dodajemy zakładkę "All" do wyników
+        # Tworzymy nowy DataFrame tylko z potrzebnymi kolumnami
+        all_summary_display = pd.DataFrame({
+            "Proceeds_converted sum": [all_summary["Proceeds_converted sum"].values[0]],
+            "Basis_converted sum": [all_summary["Basis_converted sum"].values[0]],
+            "Comm/Fee_converted sum": [all_summary["Comm/Fee_converted sum"].values[0]]
+        })
+        all_summary_html = all_summary_display.to_html(classes="table table-bordered", index=False, border=0)
+        stock_results["all"] = {
+            "display_name": "All",
+            "transactions": "",  # Puste, bo nie pokazujemy transakcji w tej zakładce
+            "summary": all_summary_html
+        }
     return render_template("results.html", stock_results=stock_results)
 
 
