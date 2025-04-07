@@ -324,10 +324,24 @@ def index():
             group_sorted["Action"] = group_sorted["id"].apply(
                 lambda x: f'<a href="{url_for("remove_transaction", transaction_id=x)}">Usuń</a>'
             )
-            styled_group = group_sorted.style.apply(highlight_fifo, axis=1)
+            
+            # Zmiana formatowania liczb w tabeli transakcji
+            styled_group = group_sorted.style.apply(highlight_fifo, axis=1).format({
+                col: lambda x: f"{x:.6f}" if isinstance(x, (float, int)) else x 
+                for col in group_sorted.select_dtypes(include=['float64', 'int64']).columns
+            })
+            
             transactions_html = styled_group.hide_index().render()
             summary = summarize_transactions(group_sorted)
-            summary_html = summary.to_html(classes="table table-bordered", index=False, border=0)
+            
+            # Zmiana formatowania liczb w tabeli podsumowania
+            summary_html = summary.to_html(
+                classes="table table-bordered", 
+                index=False, 
+                border=0,
+                float_format=lambda x: f"{x:.6f}"
+            )
+            
             stock_results[stock] = {
                 "display_name": display_name,
                 "transactions": transactions_html,
@@ -347,7 +361,15 @@ def index():
             "Basis_converted sum": [all_summary["Basis_converted sum"].values[0]],
             "Comm/Fee_converted sum": [all_summary["Comm/Fee_converted sum"].values[0]]
         })
-        all_summary_html = all_summary_display.to_html(classes="table table-bordered", index=False, border=0)
+        
+        # Zmiana formatowania liczb w tabeli podsumowania "All"
+        all_summary_html = all_summary_display.to_html(
+            classes="table table-bordered", 
+            index=False, 
+            border=0,
+            float_format=lambda x: f"{x:.6f}"
+        )
+        
         stock_results["all"] = {
             "display_name": "All",
             "transactions": "",  # Puste, bo nie pokazujemy transakcji w tej zakładce
