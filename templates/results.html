@@ -25,6 +25,46 @@
           {{ results.transactions | safe }}
           <h4 class="mt-3">Podsumowanie FIFO</h4>
           {{ results.summary | safe }}
+          
+          <hr>
+          <h2>Dodaj nową transakcję dla {{ key }}</h2>
+          <form method="post" action="{{ url_for('index') }}">
+            <input type="hidden" name="form_type" value="add_transaction">
+            <div class="form-group">
+              <label>Waluta</label>
+              <select name="waluty" class="form-control">
+                <option value="EUR">EUR</option>
+                <option value="GBP">GBP</option>
+                <option value="USD">USD</option>
+                <option value="PLN">PLN</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Stock</label>
+              <input type="text" name="Stock" class="form-control" value="{{ key }}" required>
+            </div>
+            <div class="form-group">
+              <label>Data i godzina</label>
+              <input type="datetime-local" name="DateTime" class="form-control" required>
+            </div>
+            <div class="form-group">
+              <label>Quantity</label>
+              <input type="text" name="Quantity" class="form-control" required>
+            </div>
+            <div class="form-group">
+              <label>Proceeds</label>
+              <input type="text" name="Proceeds" class="form-control" required>
+            </div>
+            <div class="form-group">
+              <label>Comm/Fee</label>
+              <input type="text" name="CommFee" class="form-control" required>
+            </div>
+            <div class="form-group">
+              <label>Basis</label>
+              <input type="text" name="Basis" class="form-control" required>
+            </div>
+            <button type="submit" class="btn btn-success">Dodaj transakcję</button>
+          </form>
         </div>
         {% endfor %}
       </div>
@@ -35,46 +75,6 @@
           <input type="file" name="files" class="form-control-file" multiple>
         </div>
         <button type="submit" class="btn btn-primary">Prześlij pliki</button>
-      </form>
-      <hr>
-      <h2>Dodaj nową transakcję</h2>
-      <form method="post" action="{{ url_for('index') }}">
-        <input type="hidden" name="form_type" value="add_transaction">
-        <div class="form-group">
-          <label>Waluta</label>
-          <select name="waluty" class="form-control">
-            <option value="EUR">EUR</option>
-            <option value="GBP">GBP</option>
-            <option value="USD">USD</option>
-            <option value="PLN">PLN</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Stock</label>
-          <input type="text" name="Stock" class="form-control" required>
-        </div>
-        <div class="form-group">
-          <label>Data i godzina</label>
-          <!-- Używamy input typu datetime-local, który otwiera widok kalendarza -->
-          <input type="datetime-local" name="DateTime" class="form-control" required>
-        </div>
-        <div class="form-group">
-          <label>Quantity</label>
-          <input type="text" name="Quantity" class="form-control" required>
-        </div>
-        <div class="form-group">
-          <label>Proceeds</label>
-          <input type="text" name="Proceeds" class="form-control" required>
-        </div>
-        <div class="form-group">
-          <label>Comm/Fee</label>
-          <input type="text" name="CommFee" class="form-control" required>
-        </div>
-        <div class="form-group">
-          <label>Basis</label>
-          <input type="text" name="Basis" class="form-control" required>
-        </div>
-        <button type="submit" class="btn btn-success">Dodaj transakcję</button>
       </form>
     </div>
   </body>
