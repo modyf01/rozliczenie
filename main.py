@@ -128,30 +128,62 @@ def allocate_fifo(df_trades: pd.DataFrame) -> pd.DataFrame:
     """
     df_trades["fifo_allocated"] = 0.0
     df_trades["fifo_used"] = False
+    df_trades["year_allocated"] = None  # Dodajemy nową kolumnę dla przypisania roku
 
     # Sprzedaże są zawsze w całości wykorzystane
     df_trades.loc[df_trades["Quantity"] < 0, "fifo_used"] = True
+    df_trades.loc[df_trades["Quantity"] < 0, "year_allocated"] = df_trades.loc[df_trades["Quantity"] < 0, "Date/Time"].dt.year
 
     for stock, group in df_trades.groupby("Stock"):
         group = group.sort_values("Date/Time").copy()
-        sells = group[group["Quantity"] < 0]
-        total_sold = -sells["Quantity"].sum() if not sells.empty else 0.0
+        
+        # Dla każdego roku, w którym wystąpiły sprzedaże, alokujemy kupna
+        for year, year_group in group[group["Quantity"] < 0].groupby(group["Date/Time"].dt.year):
+            sells_in_year = year_group[year_group["Quantity"] < 0]
+            total_sold_in_year = -sells_in_year["Quantity"].sum() if not sells_in_year.empty else 0.0
 
-        # Transakcje kupna, które nie są jeszcze wykorzystane
-        buys = group[(group["Quantity"] > 0) & (~group["fifo_used"])].sort_values("Date/Time").copy()
-        remaining = total_sold
-        for idx, buy in buys.iterrows():
-            if remaining <= 0:
-                break
-            available = buy["Quantity"]
-            if available <= remaining:
-                df_trades.at[idx, "fifo_allocated"] = available
-                df_trades.at[idx, "fifo_used"] = True
-                remaining -= available
-            else:
-                df_trades.at[idx, "fifo_allocated"] = remaining
-                df_trades.at[idx, "fifo_used"] = True
-                remaining = 0
+            # Transakcje kupna, które nie są jeszcze w pełni wykorzystane
+            buys = group[(group["Quantity"] > 0) & (group["Date/Time"] <= sells_in_year["Date/Time"].max())].sort_values("Date/Time").copy()
+            remaining = total_sold_in_year
+            
+            for idx, buy in buys.iterrows():
+                if remaining <= 0:
+                    break
+                    
+                available = buy["Quantity"] - df_trades.at[idx, "fifo_allocated"]
+                if available <= 0:
+                    continue
+                    
+                if available <= remaining:
+                    allocated_to_year = available
+                    remaining -= available
+                else:
+                    allocated_to_year = remaining
+                    remaining = 0
+                
+                # Dodajemy alokację dla danego roku
+                if pd.isna(df_trades.at[idx, "year_allocated"]):
+                    df_trades.at[idx, "year_allocated"] = {}
+                elif isinstance(df_trades.at[idx, "year_allocated"], (int, float)):
+                    # Konwersja z pojedynczego roku na słownik
+                    df_trades.at[idx, "year_allocated"] = {int(df_trades.at[idx, "year_allocated"]): df_trades.at[idx, "fifo_allocated"]}
+                
+                # Aktualizujemy alokację dla danego roku
+                year_alloc = df_trades.at[idx, "year_allocated"]
+                if isinstance(year_alloc, dict):
+                    if year in year_alloc:
+                        year_alloc[year] += allocated_to_year
+                    else:
+                        year_alloc[year] = allocated_to_year
+                    df_trades.at[idx, "year_allocated"] = year_alloc
+                else:
+                    df_trades.at[idx, "year_allocated"] = {year: allocated_to_year}
+                
+                # Aktualizujemy łączną alokację
+                df_trades.at[idx, "fifo_allocated"] += allocated_to_year
+                if df_trades.at[idx, "fifo_allocated"] >= buy["Quantity"]:
+                    df_trades.at[idx, "fifo_used"] = True
+    
     return df_trades
 
 
@@ -197,6 +229,67 @@ def summarize_transactions(group: pd.DataFrame) -> pd.DataFrame:
         "Comm/Fee_converted sum": [comm_fee_conv_sum]
     })
     return summary
+
+
+def summarize_transactions_by_year(group: pd.DataFrame) -> pd.DataFrame:
+    """
+    Generuje podsumowanie transakcji dla danego symbolu akcji z podziałem na lata.
+    """
+    # Zbieramy wszystkie lata, w których wystąpiły transakcje sprzedaży
+    years = []
+    for idx, row in group.iterrows():
+        if row["Quantity"] < 0:  # Transakcja sprzedaży
+            year = row["Date/Time"].year
+            if year not in years:
+                years.append(year)
+        elif row["Quantity"] > 0 and isinstance(row["year_allocated"], dict):  # Transakcja kupna z alokacją roczną
+            for year in row["year_allocated"].keys():
+                if year not in years:
+                    years.append(year)
+    
+    years.sort()
+    
+    # Przygotowujemy DataFrame na podsumowanie roczne
+    year_summary_data = []
+    
+    for year in years:
+        total_sold_year = 0.0
+        proceeds_year = 0.0
+        proceeds_conv_year = 0.0
+        comm_fee_year = 0.0
+        basis_year = 0.0
+        basis_conv_year = 0.0
+        comm_fee_conv_year = 0.0
+        
+        for idx, row in group.iterrows():
+            if row["Quantity"] < 0 and row["Date/Time"].year == year:  # Transakcja sprzedaży w danym roku
+                total_sold_year += -row["Quantity"]
+                proceeds_year += row["Proceeds"]
+                proceeds_conv_year += row["Proceeds_converted"]
+                comm_fee_year += row["Comm/Fee"]
+            elif row["Quantity"] > 0 and isinstance(row["year_allocated"], dict) and year in row["year_allocated"]:
+                # Transakcja kupna z alokacją do danego roku
+                fraction = row["year_allocated"][year] / row["Quantity"] if row["Quantity"] != 0 else 0
+                basis_year += row["Basis"] * fraction
+                basis_conv_year += row["Basis_converted"] * fraction
+                comm_fee_conv_year += row["Comm/Fee_converted"] * fraction
+        
+        year_summary_data.append({
+            "Year": year,
+            "Stock": group["Stock"].iloc[0],
+            "Total_Sold": total_sold_year,
+            "Proceeds sum": proceeds_year,
+            "Proceeds_converted sum": proceeds_conv_year,
+            "Comm/Fee sum": comm_fee_year,
+            "Basis sum": basis_year,
+            "Basis_converted sum": basis_conv_year,
+            "Comm/Fee_converted sum": comm_fee_conv_year
+        })
+    
+    if year_summary_data:
+        return pd.DataFrame(year_summary_data)
+    else:
+        return pd.DataFrame()
 
 
 def highlight_fifo(row):
@@ -331,6 +424,8 @@ def index():
     # Metoda GET – przetwarzamy transakcje i wyświetlamy wyniki
     processed_df = process_all_trades()
     stock_results = {}
+    yearly_summaries = {}  # Dodajemy słownik na podsumowania roczne
+    
     if not processed_df.empty:
         # Dodajemy obliczenie sum dla wszystkich akcji
         all_summary = pd.DataFrame({
@@ -343,6 +438,9 @@ def index():
             "Basis_converted sum": [0.0],
             "Comm/Fee_converted sum": [0.0]
         })
+        
+        # Przygotowanie słownika na roczne podsumowanie dla zakładki "All"
+        all_years_summary = {}
         
         for stock, group in processed_df.groupby("Stock"):
             group_sorted = group.sort_values("Date/Time").copy()
@@ -370,6 +468,38 @@ def index():
                 float_format=lambda x: f"{x:.6f}"
             )
             
+            # Dodajemy podsumowanie roczne
+            yearly_summary = summarize_transactions_by_year(group_sorted)
+            if not yearly_summary.empty:
+                yearly_summary_html = yearly_summary.to_html(
+                    classes="table table-bordered", 
+                    index=False, 
+                    border=0,
+                    float_format=lambda x: f"{x:.6f}" if isinstance(x, (float, int)) else x
+                )
+                yearly_summaries[stock] = yearly_summary_html
+                
+                # Dodajemy dane do podsumowania rocznego dla zakładki "All"
+                for _, row in yearly_summary.iterrows():
+                    year = row["Year"]
+                    if year not in all_years_summary:
+                        all_years_summary[year] = {
+                            "Total_Sold": 0.0,
+                            "Proceeds sum": 0.0,
+                            "Proceeds_converted sum": 0.0,
+                            "Comm/Fee sum": 0.0,
+                            "Basis sum": 0.0,
+                            "Basis_converted sum": 0.0,
+                            "Comm/Fee_converted sum": 0.0
+                        }
+                    all_years_summary[year]["Total_Sold"] += row["Total_Sold"]
+                    all_years_summary[year]["Proceeds sum"] += row["Proceeds sum"]
+                    all_years_summary[year]["Proceeds_converted sum"] += row["Proceeds_converted sum"]
+                    all_years_summary[year]["Comm/Fee sum"] += row["Comm/Fee sum"]
+                    all_years_summary[year]["Basis sum"] += row["Basis sum"]
+                    all_years_summary[year]["Basis_converted sum"] += row["Basis_converted sum"]
+                    all_years_summary[year]["Comm/Fee_converted sum"] += row["Comm/Fee_converted sum"]
+            
             stock_results[stock] = {
                 "display_name": display_name,
                 "transactions": transactions_html,
@@ -381,6 +511,23 @@ def index():
                 all_summary["Proceeds_converted sum"] += summary["Proceeds_converted sum"].values[0]
                 all_summary["Basis_converted sum"] += summary["Basis_converted sum"].values[0]
                 all_summary["Comm/Fee_converted sum"] += summary["Comm/Fee_converted sum"].values[0]
+        
+        # Tworzymy DataFrame z podsumowaniem rocznym dla zakładki "All"
+        if all_years_summary:
+            all_yearly_data = []
+            for year, data in sorted(all_years_summary.items()):
+                row_data = {"Year": year}
+                row_data.update(data)
+                all_yearly_data.append(row_data)
+            
+            all_yearly_df = pd.DataFrame(all_yearly_data)
+            all_yearly_html = all_yearly_df.to_html(
+                classes="table table-bordered", 
+                index=False, 
+                border=0,
+                float_format=lambda x: f"{x:.6f}" if isinstance(x, (float, int)) else x
+            )
+            yearly_summaries["all"] = all_yearly_html
         
         # Dodajemy zakładkę "All" do wyników
         # Tworzymy nowy DataFrame tylko z potrzebnymi kolumnami
@@ -407,7 +554,8 @@ def index():
     # Dodaj informację o obecnie używanym pliku z kursami
     current_rates_file = os.path.basename(exchange_rates_file)
     
-    return render_template("results.html", stock_results=stock_results, current_rates_file=current_rates_file)
+    return render_template("results.html", stock_results=stock_results, 
+                           yearly_summaries=yearly_summaries, current_rates_file=current_rates_file)
 
 
 @app.route("/remove-transaction/<int:transaction_id>")

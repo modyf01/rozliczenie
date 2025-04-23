@@ -66,6 +66,12 @@
         <div class="tab-pane fade show active" id="all" role="tabpanel" aria-labelledby="all-tab">
           <h3 class="mt-3">Podsumowanie dla wszystkich akcji</h3>
           {{ stock_results["all"].summary | safe }}
+          
+          <!-- Dodajemy podsumowanie roczne dla zakładki All -->
+          {% if "all" in yearly_summaries %}
+          <h4 class="mt-3">Podsumowanie roczne dla wszystkich akcji</h4>
+          {{ yearly_summaries["all"] | safe }}
+          {% endif %}
         </div>
         {% endif %}
         
@@ -77,8 +83,15 @@
              aria-labelledby="{{ key|replace(' ', '_') }}-tab">
           <h3 class="mt-3">Transakcje dla: {{ key }}</h3>
           {{ results.transactions | safe }}
+          
           <h4 class="mt-3">Podsumowanie FIFO</h4>
           {{ results.summary | safe }}
+          
+          <!-- Dodajemy podsumowanie roczne -->
+          {% if key in yearly_summaries %}
+          <h4 class="mt-3">Podsumowanie roczne</h4>
+          {{ yearly_summaries[key] | safe }}
+          {% endif %}
           
           <hr>
           <h2>Dodaj nową transakcję dla {{ key }}</h2>
