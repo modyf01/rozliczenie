@@ -214,64 +214,151 @@ def apply_currency_conversion(df_trades: pd.DataFrame) -> pd.DataFrame:
 
 def allocate_fifo(df_trades: pd.DataFrame) -> pd.DataFrame:
     """
-    Alokacja FIFO – przypisuje transakcjom kupna wykorzystanie zgodnie z kolejnością transakcji.
+    Alokacja FIFO – przypisuje transakcjom kupna i sprzedaży wykorzystanie 
+    zgodnie z kolejnością transakcji. Obsługuje zarówno pozycje długie 
+    jak i krótką sprzedaż (short selling).
     """
     df_trades["fifo_allocated"] = 0.0
     df_trades["fifo_used"] = False
-    df_trades["year_allocated"] = None  # Dodajemy nową kolumnę dla przypisania roku
-
-    # Sprzedaże są zawsze w całości wykorzystane
-    df_trades.loc[df_trades["Quantity"] < 0, "fifo_used"] = True
-    df_trades.loc[df_trades["Quantity"] < 0, "year_allocated"] = df_trades.loc[df_trades["Quantity"] < 0, "Date/Time"].dt.year
+    df_trades["year_allocated"] = None
 
     for stock, group in df_trades.groupby("Stock"):
+        # Sortujemy transakcje chronologicznie
         group = group.sort_values("Date/Time").copy()
         
-        # Dla każdego roku, w którym wystąpiły sprzedaże, alokujemy kupna
-        for year, year_group in group[group["Quantity"] < 0].groupby(group["Date/Time"].dt.year):
-            sells_in_year = year_group[year_group["Quantity"] < 0]
-            total_sold_in_year = -sells_in_year["Quantity"].sum() if not sells_in_year.empty else 0.0
-
-            # Transakcje kupna, które nie są jeszcze w pełni wykorzystane
-            buys = group[(group["Quantity"] > 0) & (group["Date/Time"] <= sells_in_year["Date/Time"].max())].sort_values("Date/Time").copy()
-            remaining = total_sold_in_year
+        # Tworzymy oddzielne kolejki dla transakcji kupna i sprzedaży
+        buy_queue = []  # Format: (index, ilość pozostała do alokacji, oryginalna ilość)
+        sell_queue = []  # Format: (index, ilość pozostała do alokacji, oryginalna ilość)
+        
+        # Przetwarzamy transakcje chronologicznie
+        for idx, row in group.iterrows():
+            quantity = row["Quantity"]
+            transaction_year = row["Date/Time"].year
             
-            for idx, buy in buys.iterrows():
-                if remaining <= 0:
-                    break
-                    
-                available = buy["Quantity"] - df_trades.at[idx, "fifo_allocated"]
-                if available <= 0:
-                    continue
-                    
-                if available <= remaining:
-                    allocated_to_year = available
-                    remaining -= available
-                else:
-                    allocated_to_year = remaining
-                    remaining = 0
+            if quantity > 0:  # Transakcja kupna
+                # Najpierw próbujemy pokryć istniejące pozycje krótkie
+                remaining_buy = quantity
                 
-                # Dodajemy alokację dla danego roku
-                if pd.isna(df_trades.at[idx, "year_allocated"]):
-                    df_trades.at[idx, "year_allocated"] = {}
-                elif isinstance(df_trades.at[idx, "year_allocated"], (int, float)):
-                    # Konwersja z pojedynczego roku na słownik
-                    df_trades.at[idx, "year_allocated"] = {int(df_trades.at[idx, "year_allocated"]): df_trades.at[idx, "fifo_allocated"]}
-                
-                # Aktualizujemy alokację dla danego roku
-                year_alloc = df_trades.at[idx, "year_allocated"]
-                if isinstance(year_alloc, dict):
-                    if year in year_alloc:
-                        year_alloc[year] += allocated_to_year
+                while sell_queue and remaining_buy > 0:
+                    sell_idx, sell_remaining, sell_original = sell_queue[0]
+                    
+                    # Określamy ile można alokować
+                    to_allocate = min(remaining_buy, sell_remaining)
+                    
+                    # Aktualizujemy stan transakcji sprzedaży
+                    sell_queue[0] = (sell_idx, sell_remaining - to_allocate, sell_original)
+                    
+                    # Aktualizujemy flagi dla transakcji sprzedaży
+                    df_trades.at[sell_idx, "fifo_allocated"] += to_allocate
+                    if sell_remaining == to_allocate:  # Całkowicie pokryta
+                        df_trades.at[sell_idx, "fifo_used"] = True
+                        sell_queue.pop(0)  # Usuwamy z kolejki
+                    
+                    # Aktualizujemy flagi dla transakcji kupna
+                    df_trades.at[idx, "fifo_allocated"] += to_allocate
+                    
+                    # Przypisanie roku dla celów podatkowych
+                    # Dla transakcji sprzedaży (short selling)
+                    if pd.isna(df_trades.at[sell_idx, "year_allocated"]):
+                        df_trades.at[sell_idx, "year_allocated"] = {transaction_year: to_allocate}
+                    elif isinstance(df_trades.at[sell_idx, "year_allocated"], dict):
+                        if transaction_year in df_trades.at[sell_idx, "year_allocated"]:
+                            df_trades.at[sell_idx, "year_allocated"][transaction_year] += to_allocate
+                        else:
+                            df_trades.at[sell_idx, "year_allocated"][transaction_year] = to_allocate
                     else:
-                        year_alloc[year] = allocated_to_year
-                    df_trades.at[idx, "year_allocated"] = year_alloc
-                else:
-                    df_trades.at[idx, "year_allocated"] = {year: allocated_to_year}
+                        # Konwersja z pojedynczego roku na słownik
+                        old_year = df_trades.at[sell_idx, "year_allocated"]
+                        old_allocated = sell_original - sell_remaining + to_allocate
+                        df_trades.at[sell_idx, "year_allocated"] = {
+                            old_year: old_allocated - to_allocate,
+                            transaction_year: to_allocate
+                        }
+                    
+                    # Dla transakcji kupna
+                    if pd.isna(df_trades.at[idx, "year_allocated"]):
+                        df_trades.at[idx, "year_allocated"] = {transaction_year: to_allocate}
+                    elif isinstance(df_trades.at[idx, "year_allocated"], dict):
+                        if transaction_year in df_trades.at[idx, "year_allocated"]:
+                            df_trades.at[idx, "year_allocated"][transaction_year] += to_allocate
+                        else:
+                            df_trades.at[idx, "year_allocated"][transaction_year] = to_allocate
+                    else:
+                        # Konwersja z pojedynczego roku na słownik
+                        df_trades.at[idx, "year_allocated"] = {transaction_year: to_allocate}
+                    
+                    remaining_buy -= to_allocate
                 
-                # Aktualizujemy łączną alokację
-                df_trades.at[idx, "fifo_allocated"] += allocated_to_year
-                if df_trades.at[idx, "fifo_allocated"] >= buy["Quantity"]:
+                # Jeśli zostało coś niezaalokowanego, dodajemy do kolejki kupna
+                if remaining_buy > 0:
+                    buy_queue.append((idx, remaining_buy, quantity))
+                
+                # Jeśli całkowicie zaalokowane
+                if remaining_buy == 0:
+                    df_trades.at[idx, "fifo_used"] = True
+                
+            else:  # Transakcja sprzedaży (quantity < 0)
+                # Absolutna wartość ilości sprzedaży
+                abs_quantity = -quantity
+                remaining_sell = abs_quantity
+                
+                # Najpierw próbujemy pokryć istniejące pozycje długie
+                while buy_queue and remaining_sell > 0:
+                    buy_idx, buy_remaining, buy_original = buy_queue[0]
+                    
+                    # Określamy ile można alokować
+                    to_allocate = min(remaining_sell, buy_remaining)
+                    
+                    # Aktualizujemy stan transakcji kupna
+                    buy_queue[0] = (buy_idx, buy_remaining - to_allocate, buy_original)
+                    
+                    # Aktualizujemy flagi dla transakcji kupna
+                    df_trades.at[buy_idx, "fifo_allocated"] += to_allocate
+                    if buy_remaining == to_allocate:  # Całkowicie pokryta
+                        df_trades.at[buy_idx, "fifo_used"] = True
+                        buy_queue.pop(0)  # Usuwamy z kolejki
+                    
+                    # Aktualizujemy flagi dla transakcji sprzedaży
+                    df_trades.at[idx, "fifo_allocated"] += to_allocate
+                    
+                    # Przypisanie roku dla celów podatkowych
+                    # Dla transakcji sprzedaży
+                    if pd.isna(df_trades.at[idx, "year_allocated"]):
+                        df_trades.at[idx, "year_allocated"] = {transaction_year: to_allocate}
+                    elif isinstance(df_trades.at[idx, "year_allocated"], dict):
+                        if transaction_year in df_trades.at[idx, "year_allocated"]:
+                            df_trades.at[idx, "year_allocated"][transaction_year] += to_allocate
+                        else:
+                            df_trades.at[idx, "year_allocated"][transaction_year] = to_allocate
+                    else:
+                        # Konwersja z pojedynczego roku na słownik
+                        df_trades.at[idx, "year_allocated"] = {transaction_year: to_allocate}
+                    
+                    # Dla transakcji kupna
+                    if pd.isna(df_trades.at[buy_idx, "year_allocated"]):
+                        df_trades.at[buy_idx, "year_allocated"] = {transaction_year: to_allocate}
+                    elif isinstance(df_trades.at[buy_idx, "year_allocated"], dict):
+                        if transaction_year in df_trades.at[buy_idx, "year_allocated"]:
+                            df_trades.at[buy_idx, "year_allocated"][transaction_year] += to_allocate
+                        else:
+                            df_trades.at[buy_idx, "year_allocated"][transaction_year] = to_allocate
+                    else:
+                        # Konwersja z pojedynczego roku na słownik
+                        old_year = df_trades.at[buy_idx, "year_allocated"]
+                        old_allocated = buy_original - buy_remaining + to_allocate
+                        df_trades.at[buy_idx, "year_allocated"] = {
+                            old_year: old_allocated - to_allocate,
+                            transaction_year: to_allocate
+                        }
+                    
+                    remaining_sell -= to_allocate
+                
+                # Jeśli zostało coś niezaalokowanego, dodajemy do kolejki sprzedaży (short selling)
+                if remaining_sell > 0:
+                    sell_queue.append((idx, remaining_sell, abs_quantity))
+                
+                # Jeśli całkowicie zaalokowane
+                if remaining_sell == 0:
                     df_trades.at[idx, "fifo_used"] = True
     
     return df_trades
@@ -280,6 +367,8 @@ def allocate_fifo(df_trades: pd.DataFrame) -> pd.DataFrame:
 def summarize_transactions(group: pd.DataFrame) -> pd.DataFrame:
     """
     Generuje podsumowanie transakcji dla danego symbolu akcji.
+    Uwzględnia proporcjonalne wykorzystanie transakcji w zależności od 
+    wartości fifo_allocated.
     """
     total_sold_sum = 0.0
     proceeds_sum = 0.0
@@ -290,23 +379,24 @@ def summarize_transactions(group: pd.DataFrame) -> pd.DataFrame:
     comm_fee_conv_sum = 0.0
 
     for idx, row in group.iterrows():
-        if row["fifo_used"]:
-            if row["Quantity"] < 0:
-                total_sold_sum += -row["Quantity"]
-                proceeds_sum += row["Proceeds"]
-                proceeds_conv_sum += row["Proceeds_converted"]
-                comm_fee_sum += row["Comm/Fee"]
-                basis_sum += row["Basis"]
-                basis_conv_sum += row["Basis_converted"]
-                comm_fee_conv_sum += row["Comm/Fee_converted"]
-            elif row["Quantity"] > 0:
-                fraction = row["fifo_allocated"] / row["Quantity"] if row["Quantity"] != 0 else 0
-                proceeds_sum += row["Proceeds"] * fraction
-                proceeds_conv_sum += row["Proceeds_converted"] * fraction
-                comm_fee_sum += row["Comm/Fee"] * fraction
-                basis_sum += row["Basis"] * fraction
-                basis_conv_sum += row["Basis_converted"] * fraction
-                comm_fee_conv_sum += row["Comm/Fee_converted"] * fraction
+        # Pomijamy transakcje bez alokacji
+        if row["fifo_allocated"] <= 0:
+            continue
+            
+        # Obliczamy proporcję wykorzystania transakcji
+        proportion = row["fifo_allocated"] / abs(row["Quantity"]) if row["Quantity"] != 0 else 0
+        
+        # Dodajemy wartości do sum, niezależnie od typu transakcji
+        if row["Quantity"] < 0:  # Transakcja sprzedaży
+            total_sold_sum += row["fifo_allocated"]  # Używamy dokładnej wartości alokowanej
+        
+        # Wszystkie transakcje (zarówno kupna jak i sprzedaży) dodają wartości do wszystkich sum
+        proceeds_sum += row["Proceeds"] * proportion
+        proceeds_conv_sum += row["Proceeds_converted"] * proportion
+        comm_fee_sum += row["Comm/Fee"] * proportion
+        basis_sum += row["Basis"] * proportion
+        basis_conv_sum += row["Basis_converted"] * proportion
+        comm_fee_conv_sum += row["Comm/Fee_converted"] * proportion
 
     summary = pd.DataFrame({
         "Stock": [group["Stock"].iloc[0]],
@@ -325,19 +415,19 @@ def summarize_transactions_by_year(group: pd.DataFrame) -> pd.DataFrame:
     """
     Generuje podsumowanie transakcji dla danego symbolu akcji z podziałem na lata.
     """
-    # Zbieramy wszystkie lata, w których wystąpiły transakcje sprzedaży
-    years = []
-    for idx, row in group.iterrows():
-        if row["Quantity"] < 0:  # Transakcja sprzedaży
-            year = row["Date/Time"].year
-            if year not in years:
-                years.append(year)
-        elif row["Quantity"] > 0 and isinstance(row["year_allocated"], dict):  # Transakcja kupna z alokacją roczną
-            for year in row["year_allocated"].keys():
-                if year not in years:
-                    years.append(year)
+    # Zbieramy wszystkie lata, w których wystąpiły transakcje
+    years = set()
     
-    years.sort()
+    for idx, row in group.iterrows():
+        if isinstance(row["year_allocated"], dict):
+            # Dla transakcji z przypisanym słownikiem lat
+            for year in row["year_allocated"].keys():
+                years.add(year)
+        elif pd.notna(row["year_allocated"]):
+            # Dla transakcji z pojedynczym przypisanym rokiem
+            years.add(int(row["year_allocated"]))
+    
+    years = sorted(years)
     
     # Przygotowujemy DataFrame na podsumowanie roczne
     year_summary_data = []
@@ -352,17 +442,39 @@ def summarize_transactions_by_year(group: pd.DataFrame) -> pd.DataFrame:
         comm_fee_conv_year = 0.0
         
         for idx, row in group.iterrows():
-            if row["Quantity"] < 0 and row["Date/Time"].year == year:  # Transakcja sprzedaży w danym roku
-                total_sold_year += -row["Quantity"]
+            # Pomijamy transakcje bez alokacji dla danego roku
+            year_allocation = row["year_allocated"]
+            if not isinstance(year_allocation, dict) or year not in year_allocation:
+                if not (pd.notna(year_allocation) and year_allocation == year):
+                    continue
+            
+            # Obliczamy proporcję alokowaną do danego roku
+            if isinstance(year_allocation, dict) and year in year_allocation:
+                allocated_to_year = year_allocation[year]
+                total_fraction = allocated_to_year / abs(row["Quantity"]) if row["Quantity"] != 0 else 0
+                
+                # Zliczamy sprzedane akcje
+                if row["Quantity"] < 0:  # Transakcja sprzedaży
+                    total_sold_year += allocated_to_year
+                
+                # Wszystkie transakcje dodają wartości do wszystkich sum
+                proceeds_year += row["Proceeds"] * total_fraction
+                proceeds_conv_year += row["Proceeds_converted"] * total_fraction
+                comm_fee_year += row["Comm/Fee"] * total_fraction
+                basis_year += row["Basis"] * total_fraction
+                basis_conv_year += row["Basis_converted"] * total_fraction
+                comm_fee_conv_year += row["Comm/Fee_converted"] * total_fraction
+            elif pd.notna(year_allocation) and year_allocation == year:
+                # Dla zgodności wstecz - obsługa prostego przypisania roku
+                if row["Quantity"] < 0:  # Transakcja sprzedaży
+                    total_sold_year += -row["Quantity"]
+                # Dodajemy wszystkie wartości (niezależnie od typu transakcji)
                 proceeds_year += row["Proceeds"]
                 proceeds_conv_year += row["Proceeds_converted"]
                 comm_fee_year += row["Comm/Fee"]
-            elif row["Quantity"] > 0 and isinstance(row["year_allocated"], dict) and year in row["year_allocated"]:
-                # Transakcja kupna z alokacją do danego roku
-                fraction = row["year_allocated"][year] / row["Quantity"] if row["Quantity"] != 0 else 0
-                basis_year += row["Basis"] * fraction
-                basis_conv_year += row["Basis_converted"] * fraction
-                comm_fee_conv_year += row["Comm/Fee_converted"] * fraction
+                basis_year += row["Basis"]
+                basis_conv_year += row["Basis_converted"]
+                comm_fee_conv_year += row["Comm/Fee_converted"]
         
         year_summary_data.append({
             "Year": year,
