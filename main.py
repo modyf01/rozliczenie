@@ -19,43 +19,133 @@ exchange_rates_file = "kursy.csv"  # Domyślna ścieżka do pliku z kursami
 def parse_html_transactions(html_content: str) -> pd.DataFrame:
     """
     Parsuje HTML i zwraca DataFrame z danymi transakcji.
+    Obsługuje różne formaty tabel poprzez wykrywanie nagłówków.
     """
     soup = BeautifulSoup(html_content, "html.parser")
     parent_container = soup.find(
         lambda tag: tag.name == "div" and tag.get("id") and re.search(r"^tblTransactions_.*Body$", tag.get("id"))
     )
+    
+    # Jeśli nie znaleziono standardowego kontenera, szukamy alternatywnych struktur
     if parent_container is None:
-        raise ValueError("Nie znaleziono kontenera z transakcjami")
-    trades_table = parent_container.find("table")
-    if trades_table is None:
-        raise ValueError("Nie znaleziono tabeli z transakcjami")
+        # Szukaj tabeli w całym dokumencie
+        trades_table = soup.find("table", {"class": "table-bordered"})
+        if trades_table is None:
+            raise ValueError("Nie znaleziono tabeli z transakcjami")
+    else:
+        # Znajdź tabelę z transakcjami w standardowym kontenerze
+        trades_table = parent_container.find("table")
+        if trades_table is None:
+            raise ValueError("Nie znaleziono tabeli z transakcjami")
+
+    # Znajdź nagłówki kolumn, aby określić ich indeksy
+    column_indices = {}
+    headers = trades_table.find_all("th")
+    
+    if headers:
+        for i, header in enumerate(headers):
+            header_text = header.get_text(strip=True).lower()
+            if "symbol" in header_text:
+                column_indices["symbol"] = i
+            elif "date/time" in header_text:
+                column_indices["date_time"] = i
+            elif "quantity" in header_text:
+                column_indices["quantity"] = i
+            elif "proceeds" in header_text:
+                column_indices["proceeds"] = i
+            elif "comm/fee" in header_text:
+                column_indices["comm_fee"] = i
+            elif "basis" in header_text:
+                column_indices["basis"] = i
+            elif "account" in header_text:
+                column_indices["account"] = i
+            if all(key in column_indices for key in ["symbol", "date_time", "quantity", "proceeds", "comm_fee", "basis"]):
+                break
+    
+    # Jeśli nie znaleziono nagłówków, używamy domyślnego układu
+    if not column_indices:
+        # Domyślny układ (z pierwszego formatu)
+        column_indices = {
+            "symbol": 0,
+            "date_time": 1,
+            "quantity": 2,
+            "proceeds": 5,
+            "comm_fee": 6,
+            "basis": 7
+        }
 
     data = []
     current_currency = None
+    
+    # Sprawdź, czy mamy układ z numerem konta
+    has_account_column = "account" in column_indices
+    
     for tr in trades_table.find_all("tr"):
         cells = tr.find_all("td")
+        
         # Wiersze z jedną komórką traktujemy jako nagłówek waluty
         if len(cells) == 1:
             text = cells[0].get_text(strip=True)
             if text in ["EUR", "GBP", "USD", "PLN"]:
                 current_currency = text
             continue
+        
+        # Sprawdź, czy wiersz zawiera dane transakcji (musi mieć wystarczająco kolumn)
         if len(cells) >= 8:
-            stock = cells[0].get_text(strip=True)
-            date_time = cells[1].get_text(strip=True)
-            quantity = cells[2].get_text(strip=True)
-            proceeds = cells[5].get_text(strip=True)
-            comm_fee = cells[6].get_text(strip=True)
-            basis = cells[7].get_text(strip=True)
-            data.append({
-                "waluty": current_currency,
-                "Stock": stock,
-                "Date/Time": date_time,
-                "Quantity": quantity,
-                "Proceeds": proceeds,
-                "Comm/Fee": comm_fee,
-                "Basis": basis
-            })
+            try:
+                # Obsługa przypadku, gdy pierwsza kolumna to "Account"
+                if has_account_column:
+                    # Jeśli mamy wykrytą kolumnę account, używamy ją jako wskaźnik
+                    account_idx = column_indices.get("account", 0)
+                    symbol_idx = account_idx + 1  # Symbol jest następną kolumną po Account
+                    date_time_idx = account_idx + 2
+                    quantity_idx = account_idx + 3
+                    # Pozostałe indeksy dostosowujemy według układu
+                    proceeds_idx = account_idx + 6  # Zakładamy, że Proceeds jest 6 kolumn po Account
+                    comm_fee_idx = account_idx + 7
+                    basis_idx = account_idx + 8
+                else:
+                    # Pobierz dane z komórek zgodnie z wykrytymi indeksami kolumn
+                    symbol_idx = column_indices.get("symbol", 0)
+                    date_time_idx = column_indices.get("date_time", 1)
+                    quantity_idx = column_indices.get("quantity", 2)
+                    proceeds_idx = column_indices.get("proceeds", 5)
+                    comm_fee_idx = column_indices.get("comm_fee", 6)
+                    basis_idx = column_indices.get("basis", 7)
+                
+                # Zabezpieczenie przed wyjściem poza zakres
+                symbol_idx = min(symbol_idx, len(cells) - 1)
+                stock = cells[symbol_idx].get_text(strip=True)
+
+                
+                # Zabezpieczenie przed wyjściem poza zakres
+                date_time_idx = min(date_time_idx, len(cells) - 1)
+                quantity_idx = min(quantity_idx, len(cells) - 1)
+                proceeds_idx = min(proceeds_idx, len(cells) - 1)
+                comm_fee_idx = min(comm_fee_idx, len(cells) - 1)
+                basis_idx = min(basis_idx, len(cells) - 1)
+                
+                date_time = cells[date_time_idx].get_text(strip=True)
+                quantity = cells[quantity_idx].get_text(strip=True)
+                proceeds = cells[proceeds_idx].get_text(strip=True)
+                comm_fee = cells[comm_fee_idx].get_text(strip=True)
+                basis = cells[basis_idx].get_text(strip=True)
+
+                if not stock.startswith("Total") and not cells[0].get_text(strip=True).startswith("Total"):
+                    data.append({
+                        "waluty": current_currency,
+                        "Stock": stock,
+                        "Date/Time": date_time,
+                        "Quantity": quantity,
+                        "Proceeds": proceeds,
+                        "Comm/Fee": comm_fee,
+                        "Basis": basis
+                    })
+            except Exception as e:
+                # Logowanie błędu do konsoli - możesz zakomentować lub usunąć w produkcji
+                print(f"Błąd przetwarzania wiersza: {e}")
+                continue
+    
     return pd.DataFrame(data)
 
 
