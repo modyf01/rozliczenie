@@ -9,8 +9,9 @@
   <body>
     <div class="container mt-4">
       <h1>Wyniki transakcji - Zakładki dla każdego Stock</h1>
-      <div class="refresh-container" style="margin-bottom: 20px;">
+      <div class="actions-container" style="margin-bottom: 20px; display: flex; gap: 10px;">
         <a href="{{ url_for('refresh') }}" class="btn btn-warning">Odśwież (wyczyść wszystkie transakcje)</a>
+        <a href="{{ url_for('export_csv') }}" class="btn btn-success">Eksportuj do CSV</a>
       </div>
       
       <!-- Dodajemy informację o obecnym pliku z kursami -->

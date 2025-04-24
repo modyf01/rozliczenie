@@ -1,9 +1,10 @@
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, send_file
 import pandas as pd
 import re
 from bs4 import BeautifulSoup
 from datetime import timedelta, datetime
 import os
+import io
 
 app = Flask(__name__)
 
@@ -784,6 +785,118 @@ def refresh():
             os.remove(exchange_rates_file)
     exchange_rates_file = "kursy.csv"
     return redirect(url_for("index"))
+
+
+@app.route("/export-csv")
+def export_csv():
+    """
+    Eksportuje dane do pliku CSV. W wierszach są akcje, a w kolumnach wartości:
+    Proceeds sum, Proceeds_converted sum, Comm/Fee sum, Comm/Fee_converted sum
+    
+    Dane są rozdzielone na lata - każda akcja ma wiersz podsumowujący oraz osobne wiersze dla każdego roku
+    """
+    global all_trades_df
+    if all_trades_df.empty:
+        return "Brak danych do eksportu", 400
+    
+    # Przetwarzamy dane jak w głównej funkcji
+    processed_df = process_all_trades()
+    
+    if processed_df.empty:
+        return "Brak przetworzonych danych do eksportu", 400
+    
+    # Tworzymy DataFrame dla eksportu, zawierający podsumowania dla każdej akcji
+    export_data = []
+    
+    # Słownik do przechowywania sum dla podsumowania "All"
+    all_yearly_data = {}
+    
+    for stock, group in processed_df.groupby("Stock"):
+        # Dodajemy wiersz z ogólnym podsumowaniem dla danej akcji
+        summary = summarize_transactions(group)
+        if not summary.empty:
+            export_data.append({
+                "Stock": stock,
+                "Year": "Total",  # Oznaczamy, że to wiersz z całkowitą sumą
+                "Proceeds sum": summary["Proceeds sum"].values[0],
+                "Proceeds_converted sum": summary["Proceeds_converted sum"].values[0],
+                "Comm/Fee sum": summary["Comm/Fee sum"].values[0],
+                "Comm/Fee_converted sum": summary["Comm/Fee_converted sum"].values[0]
+            })
+        
+        # Dodajemy wiersze z podsumowaniem dla każdego roku
+        yearly_summary = summarize_transactions_by_year(group)
+        if not yearly_summary.empty:
+            for _, year_row in yearly_summary.iterrows():
+                year = year_row["Year"]
+                
+                # Dodajemy dane roczne do eksportu
+                export_data.append({
+                    "Stock": stock,
+                    "Year": year,
+                    "Proceeds sum": year_row["Proceeds sum"],
+                    "Proceeds_converted sum": year_row["Proceeds_converted sum"],
+                    "Comm/Fee sum": year_row["Comm/Fee sum"],
+                    "Comm/Fee_converted sum": year_row["Comm/Fee_converted sum"]
+                })
+                
+                # Aktualizujemy sumy dla "All" w podziale na lata
+                if year not in all_yearly_data:
+                    all_yearly_data[year] = {
+                        "Proceeds sum": 0,
+                        "Proceeds_converted sum": 0,
+                        "Comm/Fee sum": 0,
+                        "Comm/Fee_converted sum": 0
+                    }
+                all_yearly_data[year]["Proceeds sum"] += year_row["Proceeds sum"]
+                all_yearly_data[year]["Proceeds_converted sum"] += year_row["Proceeds_converted sum"]
+                all_yearly_data[year]["Comm/Fee sum"] += year_row["Comm/Fee sum"]
+                all_yearly_data[year]["Comm/Fee_converted sum"] += year_row["Comm/Fee_converted sum"]
+    
+    # Dodajemy wiersz "All" z sumą wszystkich wartości
+    all_row = {
+        "Stock": "All",
+        "Year": "Total",
+        "Proceeds sum": sum(row["Proceeds sum"] for row in export_data if row["Year"] == "Total"),
+        "Proceeds_converted sum": sum(row["Proceeds_converted sum"] for row in export_data if row["Year"] == "Total"),
+        "Comm/Fee sum": sum(row["Comm/Fee sum"] for row in export_data if row["Year"] == "Total"),
+        "Comm/Fee_converted sum": sum(row["Comm/Fee_converted sum"] for row in export_data if row["Year"] == "Total")
+    }
+    export_data.append(all_row)
+    
+    # Dodajemy wiersze "All" dla każdego roku
+    for year, year_data in sorted(all_yearly_data.items()):
+        export_data.append({
+            "Stock": "All",
+            "Year": year,
+            "Proceeds sum": year_data["Proceeds sum"],
+            "Proceeds_converted sum": year_data["Proceeds_converted sum"],
+            "Comm/Fee sum": year_data["Comm/Fee sum"],
+            "Comm/Fee_converted sum": year_data["Comm/Fee_converted sum"]
+        })
+    
+    # Tworzymy DataFrame z przygotowanych danych
+    export_df = pd.DataFrame(export_data)
+    
+    # Sortujemy dane dla lepszej czytelności (najpierw po Stock, potem po Year)
+    export_df = export_df.sort_values(["Stock", "Year"], key=lambda x: x.map({"Total": 0}).fillna(x))
+    
+    # Zapisujemy do pamięci zamiast do pliku
+    output = io.StringIO()
+    export_df.to_csv(output, index=False)
+    output.seek(0)
+    
+    # Generujemy nazwę pliku z datą
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"trades_export_{timestamp}.csv"
+    
+    # Zwracamy plik do pobrania - z parametrami dla Flask 2.0+
+    return send_file(
+        io.BytesIO(output.getvalue().encode('utf-8')),
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name=filename
+    )
 
 
 if __name__ == "__main__":
