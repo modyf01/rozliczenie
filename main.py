@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 # Globalny zbiór transakcji oraz licznik unikalnych identyfikatorów
 all_trades_df = pd.DataFrame(
-    columns=["id", "waluty", "Stock", "Date/Time", "Quantity", "Proceeds", "Comm/Fee", "Basis"]
+    columns=["id", "waluty", "Stock", "Date/Time", "Quantity", "Proceeds", "Comm/Fee", "Basis", "shares_in_possession"]
 )
 next_transaction_id = 1
 exchange_rates_file = "kursy.csv"  # Domyślna ścieżka do pliku z kursami
@@ -209,7 +209,8 @@ def apply_currency_conversion(df_trades: pd.DataFrame) -> pd.DataFrame:
     df_trades = df_trades.drop(columns=["1 USD", "1 EUR", "1 GBP"], errors="ignore")
 
     desired_order = ["id", "waluty", "Stock", "Date/Time", "Quantity", "Proceeds", "Proceeds_converted",
-                     "Comm/Fee", "Basis", "Kurs_Date", "rate", "Basis_converted", "Comm/Fee_converted"]
+                     "Comm/Fee", "Basis", "Kurs_Date", "rate", "Basis_converted", "Comm/Fee_converted", 
+                     "shares_in_possession"]
     return df_trades[desired_order]
 
 
@@ -222,6 +223,7 @@ def allocate_fifo(df_trades: pd.DataFrame) -> pd.DataFrame:
     df_trades["fifo_allocated"] = 0.0
     df_trades["fifo_used"] = False
     df_trades["year_allocated"] = None
+    df_trades["shares_in_possession"] = 0.0  # Nowa kolumna do śledzenia posiadanych akcji
 
     for stock, group in df_trades.groupby("Stock"):
         # Sortujemy transakcje chronologicznie
@@ -231,10 +233,18 @@ def allocate_fifo(df_trades: pd.DataFrame) -> pd.DataFrame:
         buy_queue = []  # Format: (index, ilość pozostała do alokacji, oryginalna ilość)
         sell_queue = []  # Format: (index, ilość pozostała do alokacji, oryginalna ilość)
         
+        # Zmienna do śledzenia aktualnie posiadanych akcji dla danego stocku
+        current_possession = 0.0
+        
         # Przetwarzamy transakcje chronologicznie
         for idx, row in group.iterrows():
             quantity = row["Quantity"]
             transaction_year = row["Date/Time"].year
+            
+            # Aktualizujemy stan posiadania akcji
+            current_possession += quantity
+            # Zapisujemy aktualny stan posiadania dla tej transakcji
+            df_trades.at[idx, "shares_in_possession"] = current_possession
             
             if quantity > 0:  # Transakcja kupna
                 # Najpierw próbujemy pokryć istniejące pozycje krótkie
@@ -525,6 +535,11 @@ def process_all_trades() -> pd.DataFrame:
     if all_trades_df.empty:
         return pd.DataFrame()
     df = all_trades_df.copy()
+    
+    # Upewniamy się, że kolumna shares_in_possession istnieje
+    if "shares_in_possession" not in df.columns:
+        df["shares_in_possession"] = 0.0
+        
     df = filter_and_convert_transactions(df)
     df_kursy = load_exchange_rates(exchange_rates_file)
     df = merge_exchange_rates(df, df_kursy)
@@ -614,13 +629,17 @@ def index():
                 "Quantity": quantity,
                 "Proceeds": proceeds,
                 "Comm/Fee": comm_fee,
-                "Basis": basis
+                "Basis": basis,
+                "shares_in_possession": 0.0  # Inicjalizujemy nową kolumnę
             }
             next_transaction_id += 1
             new_df = pd.DataFrame([new_row])
             if all_trades_df.empty:
                 all_trades_df = new_df.copy()
             else:
+                # Upewniamy się, że kolumna shares_in_possession istnieje w all_trades_df
+                if "shares_in_possession" not in all_trades_df.columns:
+                    all_trades_df["shares_in_possession"] = 0.0
                 all_trades_df = pd.concat([all_trades_df, new_df], ignore_index=True)
             return redirect(url_for("index"))
 
@@ -776,7 +795,7 @@ def refresh():
     """
     global all_trades_df, next_transaction_id, exchange_rates_file
     all_trades_df = pd.DataFrame(
-        columns=["id", "waluty", "Stock", "Date/Time", "Quantity", "Proceeds", "Comm/Fee", "Basis"]
+        columns=["id", "waluty", "Stock", "Date/Time", "Quantity", "Proceeds", "Comm/Fee", "Basis", "shares_in_possession"]
     )
     next_transaction_id = 1
     # Resetowanie do domyślnego pliku z kursami
