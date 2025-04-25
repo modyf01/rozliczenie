@@ -117,7 +117,10 @@ def parse_html_transactions(html_content: str) -> pd.DataFrame:
                 # Zabezpieczenie przed wyjściem poza zakres
                 symbol_idx = min(symbol_idx, len(cells) - 1)
                 stock = cells[symbol_idx].get_text(strip=True)
-
+                
+                # Mapuj FB na META, ponieważ to ten sam stock
+                if stock == "FB":
+                    stock = "META"
                 
                 # Zabezpieczenie przed wyjściem poza zakres
                 date_time_idx = min(date_time_idx, len(cells) - 1)
@@ -388,6 +391,14 @@ def summarize_transactions(group: pd.DataFrame) -> pd.DataFrame:
     basis_sum = 0.0
     basis_conv_sum = 0.0
     comm_fee_conv_sum = 0.0
+    
+    # Nowe sumy dla transakcji sprzedaży (quantity < 0)
+    proceeds_sum_sell = 0.0
+    proceeds_conv_sum_sell = 0.0
+    comm_fee_sum_sell = 0.0
+    basis_sum_sell = 0.0
+    basis_conv_sum_sell = 0.0
+    comm_fee_conv_sum_sell = 0.0
 
     for idx, row in group.iterrows():
         # Pomijamy transakcje bez alokacji
@@ -400,6 +411,14 @@ def summarize_transactions(group: pd.DataFrame) -> pd.DataFrame:
         # Dodajemy wartości do sum, niezależnie od typu transakcji
         if row["Quantity"] < 0:  # Transakcja sprzedaży
             total_sold_sum += row["fifo_allocated"]  # Używamy dokładnej wartości alokowanej
+            
+            # Dodajemy wartości do sum dla transakcji sprzedaży
+            proceeds_sum_sell += row["Proceeds"] * proportion
+            proceeds_conv_sum_sell += row["Proceeds_converted"] * proportion
+            comm_fee_sum_sell += row["Comm/Fee"] * proportion
+            basis_sum_sell += row["Basis"] * proportion
+            basis_conv_sum_sell += row["Basis_converted"] * proportion
+            comm_fee_conv_sum_sell += row["Comm/Fee_converted"] * proportion
         
         # Wszystkie transakcje (zarówno kupna jak i sprzedaży) dodają wartości do wszystkich sum
         proceeds_sum += row["Proceeds"] * proportion
@@ -417,7 +436,14 @@ def summarize_transactions(group: pd.DataFrame) -> pd.DataFrame:
         "Comm/Fee sum": [comm_fee_sum],
         "Basis sum": [basis_sum],
         "Basis_converted sum": [basis_conv_sum],
-        "Comm/Fee_converted sum": [comm_fee_conv_sum]
+        "Comm/Fee_converted sum": [comm_fee_conv_sum],
+        # Dodajemy nowe kolumny dla transakcji sprzedaży
+        "Proceeds sum (quantity < 0)": [proceeds_sum_sell],
+        "Proceeds_converted sum (quantity < 0)": [proceeds_conv_sum_sell],
+        "Comm/Fee sum (quantity < 0)": [comm_fee_sum_sell],
+        "Basis sum (quantity < 0)": [basis_sum_sell],
+        "Basis_converted sum (quantity < 0)": [basis_conv_sum_sell],
+        "Comm/Fee_converted sum (quantity < 0)": [comm_fee_conv_sum_sell]
     })
     return summary
 
@@ -452,6 +478,14 @@ def summarize_transactions_by_year(group: pd.DataFrame) -> pd.DataFrame:
         basis_conv_year = 0.0
         comm_fee_conv_year = 0.0
         
+        # Nowe sumy dla transakcji sprzedaży (quantity < 0)
+        proceeds_year_sell = 0.0
+        proceeds_conv_year_sell = 0.0
+        comm_fee_year_sell = 0.0
+        basis_year_sell = 0.0
+        basis_conv_year_sell = 0.0
+        comm_fee_conv_year_sell = 0.0
+        
         for idx, row in group.iterrows():
             # Pomijamy transakcje bez alokacji dla danego roku
             year_allocation = row["year_allocated"]
@@ -467,6 +501,14 @@ def summarize_transactions_by_year(group: pd.DataFrame) -> pd.DataFrame:
                 # Zliczamy sprzedane akcje
                 if row["Quantity"] < 0:  # Transakcja sprzedaży
                     total_sold_year += allocated_to_year
+                    
+                    # Dodajemy wartości do sum dla transakcji sprzedaży
+                    proceeds_year_sell += row["Proceeds"] * total_fraction
+                    proceeds_conv_year_sell += row["Proceeds_converted"] * total_fraction
+                    comm_fee_year_sell += row["Comm/Fee"] * total_fraction
+                    basis_year_sell += row["Basis"] * total_fraction
+                    basis_conv_year_sell += row["Basis_converted"] * total_fraction
+                    comm_fee_conv_year_sell += row["Comm/Fee_converted"] * total_fraction
                 
                 # Wszystkie transakcje dodają wartości do wszystkich sum
                 proceeds_year += row["Proceeds"] * total_fraction
@@ -479,6 +521,15 @@ def summarize_transactions_by_year(group: pd.DataFrame) -> pd.DataFrame:
                 # Dla zgodności wstecz - obsługa prostego przypisania roku
                 if row["Quantity"] < 0:  # Transakcja sprzedaży
                     total_sold_year += -row["Quantity"]
+                    
+                    # Dodajemy wartości do sum dla transakcji sprzedaży
+                    proceeds_year_sell += row["Proceeds"]
+                    proceeds_conv_year_sell += row["Proceeds_converted"]
+                    comm_fee_year_sell += row["Comm/Fee"]
+                    basis_year_sell += row["Basis"]
+                    basis_conv_year_sell += row["Basis_converted"]
+                    comm_fee_conv_year_sell += row["Comm/Fee_converted"]
+                
                 # Dodajemy wszystkie wartości (niezależnie od typu transakcji)
                 proceeds_year += row["Proceeds"]
                 proceeds_conv_year += row["Proceeds_converted"]
@@ -496,7 +547,14 @@ def summarize_transactions_by_year(group: pd.DataFrame) -> pd.DataFrame:
             "Comm/Fee sum": comm_fee_year,
             "Basis sum": basis_year,
             "Basis_converted sum": basis_conv_year,
-            "Comm/Fee_converted sum": comm_fee_conv_year
+            "Comm/Fee_converted sum": comm_fee_conv_year,
+            # Dodajemy nowe kolumny dla transakcji sprzedaży
+            "Proceeds sum (quantity < 0)": proceeds_year_sell,
+            "Proceeds_converted sum (quantity < 0)": proceeds_conv_year_sell,
+            "Comm/Fee sum (quantity < 0)": comm_fee_year_sell,
+            "Basis sum (quantity < 0)": basis_year_sell,
+            "Basis_converted sum (quantity < 0)": basis_conv_year_sell,
+            "Comm/Fee_converted sum (quantity < 0)": comm_fee_conv_year_sell
         })
     
     if year_summary_data:
@@ -526,6 +584,14 @@ def check_negative_fifo(df_stock: pd.DataFrame) -> bool:
     return False
 
 
+def standardize_stock_symbols(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Standaryzuje symbole akcji - zamienia FB na META
+    """
+    df.loc[df["Stock"] == "FB", "Stock"] = "META"
+    return df
+
+
 def process_all_trades() -> pd.DataFrame:
     """
     Przetwarza globalny DataFrame transakcji pełnym potokiem: filtrowanie, łączenie z kursami,
@@ -539,6 +605,9 @@ def process_all_trades() -> pd.DataFrame:
     # Upewniamy się, że kolumna shares_in_possession istnieje
     if "shares_in_possession" not in df.columns:
         df["shares_in_possession"] = 0.0
+    
+    # Standaryzujemy symbole akcji
+    df = standardize_stock_symbols(df)
         
     df = filter_and_convert_transactions(df)
     df_kursy = load_exchange_rates(exchange_rates_file)
@@ -606,6 +675,11 @@ def index():
         elif request.form.get("form_type") == "add_transaction":
             waluty = request.form.get("waluty")
             stock = request.form.get("Stock")
+            
+            # Standardize stock symbol
+            if stock == "FB":
+                stock = "META"
+            
             date_time = request.form.get("DateTime")
             quantity = request.form.get("Quantity")
             proceeds = request.form.get("Proceeds")
@@ -658,7 +732,14 @@ def index():
             "Comm/Fee sum": [0.0],
             "Basis sum": [0.0],
             "Basis_converted sum": [0.0],
-            "Comm/Fee_converted sum": [0.0]
+            "Comm/Fee_converted sum": [0.0],
+            # Dodajemy nowe kolumny dla transakcji sprzedaży
+            "Proceeds sum (quantity < 0)": [0.0],
+            "Proceeds_converted sum (quantity < 0)": [0.0],
+            "Comm/Fee sum (quantity < 0)": [0.0],
+            "Basis sum (quantity < 0)": [0.0],
+            "Basis_converted sum (quantity < 0)": [0.0],
+            "Comm/Fee_converted sum (quantity < 0)": [0.0]
         })
         
         # Przygotowanie słownika na roczne podsumowanie dla zakładki "All"
@@ -712,7 +793,14 @@ def index():
                             "Comm/Fee sum": 0.0,
                             "Basis sum": 0.0,
                             "Basis_converted sum": 0.0,
-                            "Comm/Fee_converted sum": 0.0
+                            "Comm/Fee_converted sum": 0.0,
+                            # Dodajemy nowe kolumny
+                            "Proceeds sum (quantity < 0)": 0.0,
+                            "Proceeds_converted sum (quantity < 0)": 0.0,
+                            "Comm/Fee sum (quantity < 0)": 0.0,
+                            "Basis sum (quantity < 0)": 0.0, 
+                            "Basis_converted sum (quantity < 0)": 0.0,
+                            "Comm/Fee_converted sum (quantity < 0)": 0.0
                         }
                     all_years_summary[year]["Total_Sold"] += row["Total_Sold"]
                     all_years_summary[year]["Proceeds sum"] += row["Proceeds sum"]
@@ -721,6 +809,13 @@ def index():
                     all_years_summary[year]["Basis sum"] += row["Basis sum"]
                     all_years_summary[year]["Basis_converted sum"] += row["Basis_converted sum"]
                     all_years_summary[year]["Comm/Fee_converted sum"] += row["Comm/Fee_converted sum"]
+                    # Dodajemy aktualizację nowych kolumn
+                    all_years_summary[year]["Proceeds sum (quantity < 0)"] += row["Proceeds sum (quantity < 0)"]
+                    all_years_summary[year]["Proceeds_converted sum (quantity < 0)"] += row["Proceeds_converted sum (quantity < 0)"]
+                    all_years_summary[year]["Comm/Fee sum (quantity < 0)"] += row["Comm/Fee sum (quantity < 0)"]
+                    all_years_summary[year]["Basis sum (quantity < 0)"] += row["Basis sum (quantity < 0)"]
+                    all_years_summary[year]["Basis_converted sum (quantity < 0)"] += row["Basis_converted sum (quantity < 0)"]
+                    all_years_summary[year]["Comm/Fee_converted sum (quantity < 0)"] += row["Comm/Fee_converted sum (quantity < 0)"]
             
             stock_results[stock] = {
                 "display_name": display_name,
@@ -733,6 +828,13 @@ def index():
                 all_summary["Proceeds_converted sum"] += summary["Proceeds_converted sum"].values[0]
                 all_summary["Basis_converted sum"] += summary["Basis_converted sum"].values[0]
                 all_summary["Comm/Fee_converted sum"] += summary["Comm/Fee_converted sum"].values[0]
+                # Dodajemy aktualizację nowych kolumn
+                all_summary["Proceeds sum (quantity < 0)"] += summary["Proceeds sum (quantity < 0)"].values[0]
+                all_summary["Proceeds_converted sum (quantity < 0)"] += summary["Proceeds_converted sum (quantity < 0)"].values[0]
+                all_summary["Comm/Fee sum (quantity < 0)"] += summary["Comm/Fee sum (quantity < 0)"].values[0]
+                all_summary["Basis sum (quantity < 0)"] += summary["Basis sum (quantity < 0)"].values[0]
+                all_summary["Basis_converted sum (quantity < 0)"] += summary["Basis_converted sum (quantity < 0)"].values[0]
+                all_summary["Comm/Fee_converted sum (quantity < 0)"] += summary["Comm/Fee_converted sum (quantity < 0)"].values[0]
         
         # Tworzymy DataFrame z podsumowaniem rocznym dla zakładki "All"
         if all_years_summary:
@@ -756,7 +858,11 @@ def index():
         all_summary_display = pd.DataFrame({
             "Proceeds_converted sum": [all_summary["Proceeds_converted sum"].values[0]],
             "Basis_converted sum": [all_summary["Basis_converted sum"].values[0]],
-            "Comm/Fee_converted sum": [all_summary["Comm/Fee_converted sum"].values[0]]
+            "Comm/Fee_converted sum": [all_summary["Comm/Fee_converted sum"].values[0]],
+            # Dodajemy nowe kolumny
+            "Proceeds_converted sum (quantity < 0)": [all_summary["Proceeds_converted sum (quantity < 0)"].values[0]],
+            "Basis_converted sum (quantity < 0)": [all_summary["Basis_converted sum (quantity < 0)"].values[0]],
+            "Comm/Fee_converted sum (quantity < 0)": [all_summary["Comm/Fee_converted sum (quantity < 0)"].values[0]]
         })
         
         # Zmiana formatowania liczb w tabeli podsumowania "All"
@@ -811,6 +917,7 @@ def export_csv():
     """
     Eksportuje dane do pliku CSV. W wierszach są akcje, a w kolumnach wartości:
     Proceeds sum, Proceeds_converted sum, Comm/Fee sum, Comm/Fee_converted sum
+    oraz dodatkowe kolumny zawierające sumy dla transakcji sprzedaży.
     
     Dane są rozdzielone na lata - każda akcja ma wiersz podsumowujący oraz osobne wiersze dla każdego roku
     """
@@ -840,7 +947,14 @@ def export_csv():
                 "Proceeds sum": summary["Proceeds sum"].values[0],
                 "Proceeds_converted sum": summary["Proceeds_converted sum"].values[0],
                 "Comm/Fee sum": summary["Comm/Fee sum"].values[0],
-                "Comm/Fee_converted sum": summary["Comm/Fee_converted sum"].values[0]
+                "Comm/Fee_converted sum": summary["Comm/Fee_converted sum"].values[0],
+                # Dodajemy nowe kolumny
+                "Proceeds sum (quantity < 0)": summary["Proceeds sum (quantity < 0)"].values[0],
+                "Proceeds_converted sum (quantity < 0)": summary["Proceeds_converted sum (quantity < 0)"].values[0],
+                "Comm/Fee sum (quantity < 0)": summary["Comm/Fee sum (quantity < 0)"].values[0],
+                "Basis sum (quantity < 0)": summary["Basis sum (quantity < 0)"].values[0],
+                "Basis_converted sum (quantity < 0)": summary["Basis_converted sum (quantity < 0)"].values[0],
+                "Comm/Fee_converted sum (quantity < 0)": summary["Comm/Fee_converted sum (quantity < 0)"].values[0]
             })
         
         # Dodajemy wiersze z podsumowaniem dla każdego roku
@@ -856,7 +970,14 @@ def export_csv():
                     "Proceeds sum": year_row["Proceeds sum"],
                     "Proceeds_converted sum": year_row["Proceeds_converted sum"],
                     "Comm/Fee sum": year_row["Comm/Fee sum"],
-                    "Comm/Fee_converted sum": year_row["Comm/Fee_converted sum"]
+                    "Comm/Fee_converted sum": year_row["Comm/Fee_converted sum"],
+                    # Dodajemy nowe kolumny
+                    "Proceeds sum (quantity < 0)": year_row["Proceeds sum (quantity < 0)"],
+                    "Proceeds_converted sum (quantity < 0)": year_row["Proceeds_converted sum (quantity < 0)"],
+                    "Comm/Fee sum (quantity < 0)": year_row["Comm/Fee sum (quantity < 0)"],
+                    "Basis sum (quantity < 0)": year_row["Basis sum (quantity < 0)"],
+                    "Basis_converted sum (quantity < 0)": year_row["Basis_converted sum (quantity < 0)"],
+                    "Comm/Fee_converted sum (quantity < 0)": year_row["Comm/Fee_converted sum (quantity < 0)"]
                 })
                 
                 # Aktualizujemy sumy dla "All" w podziale na lata
@@ -865,12 +986,26 @@ def export_csv():
                         "Proceeds sum": 0,
                         "Proceeds_converted sum": 0,
                         "Comm/Fee sum": 0,
-                        "Comm/Fee_converted sum": 0
+                        "Comm/Fee_converted sum": 0,
+                        # Dodajemy nowe kolumny
+                        "Proceeds sum (quantity < 0)": 0,
+                        "Proceeds_converted sum (quantity < 0)": 0,
+                        "Comm/Fee sum (quantity < 0)": 0,
+                        "Basis sum (quantity < 0)": 0,
+                        "Basis_converted sum (quantity < 0)": 0,
+                        "Comm/Fee_converted sum (quantity < 0)": 0
                     }
                 all_yearly_data[year]["Proceeds sum"] += year_row["Proceeds sum"]
                 all_yearly_data[year]["Proceeds_converted sum"] += year_row["Proceeds_converted sum"]
                 all_yearly_data[year]["Comm/Fee sum"] += year_row["Comm/Fee sum"]
                 all_yearly_data[year]["Comm/Fee_converted sum"] += year_row["Comm/Fee_converted sum"]
+                # Dodajemy aktualizację nowych kolumn
+                all_yearly_data[year]["Proceeds sum (quantity < 0)"] += year_row["Proceeds sum (quantity < 0)"]
+                all_yearly_data[year]["Proceeds_converted sum (quantity < 0)"] += year_row["Proceeds_converted sum (quantity < 0)"]
+                all_yearly_data[year]["Comm/Fee sum (quantity < 0)"] += year_row["Comm/Fee sum (quantity < 0)"]
+                all_yearly_data[year]["Basis sum (quantity < 0)"] += year_row["Basis sum (quantity < 0)"]
+                all_yearly_data[year]["Basis_converted sum (quantity < 0)"] += year_row["Basis_converted sum (quantity < 0)"]
+                all_yearly_data[year]["Comm/Fee_converted sum (quantity < 0)"] += year_row["Comm/Fee_converted sum (quantity < 0)"]
     
     # Dodajemy wiersz "All" z sumą wszystkich wartości
     all_row = {
@@ -879,7 +1014,14 @@ def export_csv():
         "Proceeds sum": sum(row["Proceeds sum"] for row in export_data if row["Year"] == "Total"),
         "Proceeds_converted sum": sum(row["Proceeds_converted sum"] for row in export_data if row["Year"] == "Total"),
         "Comm/Fee sum": sum(row["Comm/Fee sum"] for row in export_data if row["Year"] == "Total"),
-        "Comm/Fee_converted sum": sum(row["Comm/Fee_converted sum"] for row in export_data if row["Year"] == "Total")
+        "Comm/Fee_converted sum": sum(row["Comm/Fee_converted sum"] for row in export_data if row["Year"] == "Total"),
+        # Dodajemy nowe kolumny
+        "Proceeds sum (quantity < 0)": sum(row["Proceeds sum (quantity < 0)"] for row in export_data if row["Year"] == "Total"),
+        "Proceeds_converted sum (quantity < 0)": sum(row["Proceeds_converted sum (quantity < 0)"] for row in export_data if row["Year"] == "Total"),
+        "Comm/Fee sum (quantity < 0)": sum(row["Comm/Fee sum (quantity < 0)"] for row in export_data if row["Year"] == "Total"),
+        "Basis sum (quantity < 0)": sum(row["Basis sum (quantity < 0)"] for row in export_data if row["Year"] == "Total"),
+        "Basis_converted sum (quantity < 0)": sum(row["Basis_converted sum (quantity < 0)"] for row in export_data if row["Year"] == "Total"),
+        "Comm/Fee_converted sum (quantity < 0)": sum(row["Comm/Fee_converted sum (quantity < 0)"] for row in export_data if row["Year"] == "Total")
     }
     export_data.append(all_row)
     
@@ -891,7 +1033,14 @@ def export_csv():
             "Proceeds sum": year_data["Proceeds sum"],
             "Proceeds_converted sum": year_data["Proceeds_converted sum"],
             "Comm/Fee sum": year_data["Comm/Fee sum"],
-            "Comm/Fee_converted sum": year_data["Comm/Fee_converted sum"]
+            "Comm/Fee_converted sum": year_data["Comm/Fee_converted sum"],
+            # Dodajemy nowe kolumny
+            "Proceeds sum (quantity < 0)": year_data["Proceeds sum (quantity < 0)"],
+            "Proceeds_converted sum (quantity < 0)": year_data["Proceeds_converted sum (quantity < 0)"],
+            "Comm/Fee sum (quantity < 0)": year_data["Comm/Fee sum (quantity < 0)"],
+            "Basis sum (quantity < 0)": year_data["Basis sum (quantity < 0)"],
+            "Basis_converted sum (quantity < 0)": year_data["Basis_converted sum (quantity < 0)"],
+            "Comm/Fee_converted sum (quantity < 0)": year_data["Comm/Fee_converted sum (quantity < 0)"]
         })
     
     # Tworzymy DataFrame z przygotowanych danych
